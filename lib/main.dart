@@ -3,7 +3,7 @@ import 'package:http/http.dart' as http;
 import 'package:webfeed/webfeed.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:video_player/video_player.dart';
-import 'dart:async';
+import 'package:intl/intl.dart';
 
 void main() {
   runApp(const MyApp());
@@ -15,9 +15,18 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Real Estate Feeds',
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
+      title: 'RealEstateFeed',
+      theme: ThemeData.light().copyWith(
+        scaffoldBackgroundColor: const Color(0xFFF4F1EE),
+        primaryColor: const Color(0xFF5A2A27),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF5A2A27),
+          foregroundColor: Colors.white,
+        ),
+        colorScheme: ColorScheme.fromSwatch().copyWith(
+          primary: const Color(0xFF5A2A27),
+          secondary: const Color(0xFFF4F1EE),
+        ),
       ),
       home: const FeedListPage(),
     );
@@ -26,7 +35,6 @@ class MyApp extends StatelessWidget {
 
 class FeedListPage extends StatefulWidget {
   const FeedListPage({super.key});
-
   @override
   FeedListPageState createState() => FeedListPageState();
 }
@@ -51,9 +59,10 @@ class FeedListPageState extends State<FeedListPage> {
     "Mashvisor": {"Real Estate Blog": "https://www.mashvisor.com/blog/feed/"}
   };
 
-  List<Map<String, dynamic>> articles = [];
+  List<Map<String, dynamic>> allArticles = [];
+  List<Map<String, dynamic>> filteredArticles = [];
   bool isLoading = true;
-  String loadingMessage = "Fetching feeds...";
+  final TextEditingController searchController = TextEditingController();
 
   late VideoPlayerController _videoController;
 
@@ -74,106 +83,151 @@ class FeedListPageState extends State<FeedListPage> {
   @override
   void dispose() {
     _videoController.dispose();
+    searchController.dispose();
     super.dispose();
   }
 
+  String formatPubDateUTC(DateTime utcDateTime) {
+    final df = DateFormat("EEE, MMM d, yyyy - HH:mm 'UTC'");
+    return df.format(utcDateTime.toUtc());
+  }
+
   Future<void> fetchFeeds() async {
-    final userAgent =
+    const userAgent =
         'Mozilla/5.0 (iPhone; CPU iPhone OS 10_3 like Mac OS X) AppleWebKit/602.1.50 (KHTML, like Gecko) Mobile/14E5239e';
+    final Set<String> identifiers = {};
+    final List<Map<String, dynamic>> fetchedArticles = [];
+    final DateTime now = DateTime.now().toUtc();
 
-    final Set<String> articleIdentifiers = {};
-
-    try {
-      for (var feedCategory in rssFeeds.values) {
-        for (var feedUrl in feedCategory.values) {
-          try {
-            final response = await http.get(
-              Uri.parse(feedUrl),
-              headers: {'User-Agent': userAgent},
-            );
-            if (response.statusCode == 200) {
-              final rssFeed = RssFeed.parse(response.body);
-
-              List<Map<String, dynamic>> newArticles = [];
-              for (var item in rssFeed.items!) {
-                final identifier =
-                    '${item.title?.toLowerCase().trim()}_${item.pubDate ?? ''}';
-
-                if (!articleIdentifiers.contains(identifier)) {
-                  articleIdentifiers.add(identifier);
-
-                  newArticles.add({
-                    'title': item.title ?? 'No title',
-                    'link': item.link ?? '',
-                    'pubDate': item.pubDate?.toString() ?? '',
-                  });
-                }
+    for (var source in rssFeeds.entries) {
+      for (var feedUrl in source.value.values) {
+        try {
+          final response = await http
+              .get(Uri.parse(feedUrl), headers: {'User-Agent': userAgent});
+          if (response.statusCode == 200) {
+            final rssFeed = RssFeed.parse(response.body);
+            for (var item in rssFeed.items ?? []) {
+              final id =
+                  '${item.title?.toLowerCase().trim()}_${item.pubDate ?? item.link ?? ''}';
+              if (!identifiers.contains(id)) {
+                identifiers.add(id);
+                final pubDate = item.pubDate?.toUtc().isAfter(now) ?? false
+                    ? now
+                    : item.pubDate?.toUtc() ?? now;
+                fetchedArticles.add({
+                  'title': item.title ?? 'No title',
+                  'link': item.link ?? '',
+                  'rawDate': pubDate,
+                  'pubDate': formatPubDateUTC(pubDate),
+                  'source': source.key
+                });
               }
-
-              setState(() {
-                articles.addAll(newArticles);
-                articles.sort((a, b) => b['pubDate'].compareTo(a['pubDate']));
-              });
             }
-          } catch (e) {
-            debugPrint("Error fetching/parsing feed: $feedUrl. Error: $e");
           }
+        } catch (e) {
+          debugPrint('Error loading feed $feedUrl: $e');
         }
       }
-    } catch (e) {
-      debugPrint("Error fetching feeds: $e");
-    } finally {
+    }
+
+    fetchedArticles.sort((a, b) => b['rawDate'].compareTo(a['rawDate']));
+    if (mounted) {
       setState(() {
+        allArticles = fetchedArticles;
+        filteredArticles = fetchedArticles;
         isLoading = false;
       });
     }
+  }
+
+  void filterSearchResults(String query) {
+    setState(() {
+      filteredArticles = allArticles.where((a) {
+        return a['title'].toLowerCase().contains(query.toLowerCase());
+      }).toList();
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Real Estate Feeds'),
+        title: const Text('RealEstateFeed'),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: SizedBox(
+              width: 200,
+              child: TextField(
+                controller: searchController,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  hintText: 'Search...',
+                  hintStyle: const TextStyle(color: Colors.white70),
+                  filled: true,
+                  fillColor: Colors.black26,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+                onChanged: filterSearchResults,
+              ),
+            ),
+          )
+        ],
       ),
       body: Column(
         children: [
           Expanded(
             flex: 8,
             child: isLoading
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const CircularProgressIndicator(),
-                        const SizedBox(height: 20),
-                        Text(loadingMessage),
-                      ],
-                    ),
-                  )
+                ? const Center(child: CircularProgressIndicator())
                 : RefreshIndicator(
                     onRefresh: fetchFeeds,
                     child: ListView.builder(
-                      itemCount: articles.length,
+                      itemCount: filteredArticles.length,
                       itemBuilder: (context, index) {
-                        final article = articles[index];
-                        return ListTile(
-                          title: Text(article['title']!),
-                          subtitle: Text(article['pubDate']),
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) =>
-                                    WebViewScreen(url: article['link']!),
-                              ),
-                            );
-                          },
+                        final article = filteredArticles[index];
+                        final isEven = index % 2 == 0;
+                        final bgColor = isEven
+                            ? const Color(0xFF5A2A27)
+                            : const Color(0xFFF4F1EE);
+                        final textColor =
+                            isEven ? Colors.white : Colors.black87;
+
+                        return Container(
+                          color: bgColor,
+                          child: ListTile(
+                            title: Text(
+                              article['title'],
+                              style: TextStyle(
+                                  color: textColor,
+                                  fontWeight: FontWeight.bold),
+                            ),
+                            subtitle: Text(
+                              "${article['pubDate']} • ${article['source']}",
+                              style:
+                                  TextStyle(color: textColor.withOpacity(0.8)),
+                            ),
+                            onTap: () {
+                              final link = article['link'];
+                              if (link.isNotEmpty) {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) =>
+                                        WebViewScreen(url: link),
+                                  ),
+                                );
+                              }
+                            },
+                          ),
                         );
                       },
                     ),
                   ),
           ),
-          // Michele's Section
           GestureDetector(
             onTap: () {
               Navigator.push(
@@ -187,7 +241,7 @@ class FeedListPageState extends State<FeedListPage> {
             },
             child: Container(
               height: MediaQuery.of(context).size.height * 0.2,
-              color: Colors.blueGrey[900],
+              color: const Color(0xFF5A2A27),
               child: Stack(
                 children: [
                   Positioned.fill(
@@ -205,9 +259,9 @@ class FeedListPageState extends State<FeedListPage> {
                     bottom: 20,
                     child: Row(
                       children: [
-                        CircleAvatar(
+                        const CircleAvatar(
                           radius: 35,
-                          backgroundImage: const NetworkImage(
+                          backgroundImage: NetworkImage(
                             'https://res.cloudinary.com/luxuryp/images/w_1920,c_limit,f_auto,q_auto/sfxhvzwm6pt4wxokotkj/michele-dibenedetto',
                           ),
                         ),
@@ -221,6 +275,12 @@ class FeedListPageState extends State<FeedListPage> {
                                 fontSize: 20,
                                 color: Colors.white,
                                 fontWeight: FontWeight.bold,
+                                shadows: [
+                                  Shadow(
+                                      offset: Offset(1, 1),
+                                      blurRadius: 3,
+                                      color: Colors.black),
+                                ],
                               ),
                             ),
                             Text(
@@ -228,6 +288,12 @@ class FeedListPageState extends State<FeedListPage> {
                               style: TextStyle(
                                 fontSize: 14,
                                 color: Colors.white70,
+                                shadows: [
+                                  Shadow(
+                                      offset: Offset(1, 1),
+                                      blurRadius: 3,
+                                      color: Colors.black),
+                                ],
                               ),
                             ),
                           ],
@@ -247,11 +313,10 @@ class FeedListPageState extends State<FeedListPage> {
 
 class WebViewScreen extends StatefulWidget {
   final String url;
-
   const WebViewScreen({Key? key, required this.url}) : super(key: key);
 
   @override
-  _WebViewScreenState createState() => _WebViewScreenState();
+  State<WebViewScreen> createState() => _WebViewScreenState();
 }
 
 class _WebViewScreenState extends State<WebViewScreen> {
@@ -268,9 +333,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Article'),
-      ),
+      appBar: AppBar(title: const Text('Article')),
       body: WebViewWidget(controller: controller),
     );
   }
